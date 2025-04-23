@@ -96,7 +96,7 @@ pub struct PostResponse {
 #[derive(Deserialize, Clone, Debug)]
 pub struct PostResponseData {
     pub id: u64,
-    pub response: ExchangeResponseStatus,
+    pub response: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -308,6 +308,7 @@ impl WsManager {
         match data {
             Ok(message) => match message {
                 protocol::Message::Text(text) => {
+                    println!("Received WS message: {}", text);  // Debug print
                     let message: Message =
                         serde_json::from_str(&text).map_err(|e| Error::JsonParse(e.to_string()))?;
 
