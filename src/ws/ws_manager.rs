@@ -2,7 +2,7 @@ use crate::{
     prelude::*,
     ws::message_types::{AllMids, Candle, L2Book, OrderUpdates, Trades, User},
     ActiveAssetCtx, Error, Notification, UserFills, UserFundings, UserNonFundingLedgerUpdates,
-    WebData2,
+    WebData2, helpers::next_nonce,
 };
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use log::{error, info, warn};
@@ -28,7 +28,6 @@ use tokio_tungstenite::{
     tungstenite::{self, protocol},
     MaybeTlsStream, WebSocketStream,
 };
-
 use ethers::types::H160;
 
 #[derive(Debug)]
@@ -37,6 +36,7 @@ struct SubscriptionData {
     subscription_id: u32,
     id: String,
 }
+
 #[derive(Debug)]
 pub(crate) struct WsManager {
     stop_flag: Arc<AtomicBool>,
@@ -84,6 +84,25 @@ pub enum Message {
     WebData2(WebData2),
     ActiveAssetCtx(ActiveAssetCtx),
     Pong,
+    Post(PostResponse),
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostResponse {
+    pub data: PostResponseData,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostResponseData {
+    pub id: u64,
+    pub response: PostResponseInner,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostResponseInner {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub payload: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -95,6 +114,20 @@ pub(crate) struct SubscriptionSendData<'a> {
 #[derive(Serialize)]
 pub(crate) struct Ping {
     method: &'static str,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WsActionRequest {
+    method: &'static str,
+    id: u64,
+    request: WsActionRequestInner,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WsActionRequestInner {
+    #[serde(rename = "type")]
+    request_type: &'static str,
+    payload: serde_json::Value,
 }
 
 impl WsManager {
@@ -270,6 +303,7 @@ impl WsManager {
             Message::SubscriptionResponse | Message::Pong => Ok(String::default()),
             Message::NoData => Ok("".to_string()),
             Message::HyperliquidError(err) => Ok(format!("hyperliquid error: {err:?}")),
+            Message::Post(_) => Ok("postResponse".to_string()),
         }
     }
 
@@ -278,21 +312,16 @@ impl WsManager {
         subscriptions: &Arc<Mutex<HashMap<String, Vec<SubscriptionData>>>>,
     ) -> Result<()> {
         match data {
-            Ok(data) => match data.into_text() {
-                Ok(data) => {
-                    if !data.starts_with('{') {
-                        return Ok(());
-                    }
-                    let message = serde_json::from_str::<Message>(&data)
-                        .map_err(|e| Error::JsonParse(e.to_string()))?;
-                    let identifier = WsManager::get_identifier(&message)?;
-                    if identifier.is_empty() {
-                        return Ok(());
-                    }
+            Ok(message) => match message {
+                protocol::Message::Text(text) => {
+                    let message: Message =
+                        serde_json::from_str(&text).map_err(|e| Error::JsonParse(e.to_string()))?;
 
+                    // Handle messages
+                    let identifier = Self::get_identifier(&message)?;
                     let mut subscriptions = subscriptions.lock().await;
-                    let mut res = Ok(());
                     if let Some(subscription_datas) = subscriptions.get_mut(&identifier) {
+                        let mut res = Ok(());
                         for subscription_data in subscription_datas {
                             if let Err(e) = subscription_data
                                 .sending_channel
@@ -302,11 +331,13 @@ impl WsManager {
                                 res = Err(e);
                             }
                         }
+                        res
+                    } else {
+                        Ok(())
                     }
-                    res
                 }
-                Err(err) => {
-                    let error = Error::ReaderTextConversion(err.to_string());
+                _ => {
+                    let error = Error::ReaderTextConversion(format!("Unexpected message type: {:?}", message));
                     Ok(WsManager::send_to_all_subscriptions(
                         subscriptions,
                         Message::HyperliquidError(error.to_string()),
@@ -460,6 +491,31 @@ impl WsManager {
         if subscriptions.is_empty() {
             Self::unsubscribe(self.writer.lock().await.borrow_mut(), identifier.as_str()).await?;
         }
+        Ok(())
+    }
+
+    pub(crate) async fn post_action(&self, payload: serde_json::Value) -> Result<()> {
+        let id = next_nonce();
+        let request = WsActionRequest {
+            method: "post",
+            id,
+            request: WsActionRequestInner {
+                request_type: "action",
+                payload,
+            },
+        };
+
+        let payload = serde_json::to_string(&request)
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        // Send the request
+        self.writer
+            .lock()
+            .await
+            .send(protocol::Message::Text(payload))
+            .await
+            .map_err(|e| Error::Websocket(e.to_string()))?;
+
         Ok(())
     }
 }

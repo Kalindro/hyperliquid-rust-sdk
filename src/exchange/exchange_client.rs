@@ -39,6 +39,7 @@ pub struct ExchangeClient {
     pub meta: Meta,
     pub vault_address: Option<H160>,
     pub coin_to_asset: HashMap<String, u32>,
+    pub info_client: Option<InfoClient>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -122,6 +123,7 @@ impl ExchangeClient {
                 base_url: base_url.get_url(),
             },
             coin_to_asset,
+            info_client: None,
         })
     }
 
@@ -758,6 +760,41 @@ impl ExchangeClient {
         let is_mainnet = self.http_client.is_mainnet();
         let signature = sign_l1_action(wallet, connection_id, is_mainnet)?;
         self.post(action, signature, timestamp).await
+    }
+
+    pub fn with_info_client(&mut self, info_client: InfoClient) -> &mut Self {
+        self.info_client = Some(info_client);
+        self
+    }
+
+    pub async fn order_ws(&self, order: ClientOrderRequest) -> Result<()> {
+        let info_client = self.info_client.as_ref().ok_or(Error::WebSocketNotInitialized)?;
+        let timestamp = next_nonce();
+
+        let transformed_order = order.convert(&self.coin_to_asset)?;
+        let action = Actions::Order(BulkOrder {
+            orders: vec![transformed_order],
+            grouping: "na".to_string(),
+            builder: None,
+        });
+
+        let connection_id = action.hash(timestamp, self.vault_address)?;
+        let action = serde_json::to_value(&action).map_err(|e| Error::JsonParse(e.to_string()))?;
+
+        let is_mainnet = self.http_client.is_mainnet();
+        let signature = sign_l1_action(&self.wallet, connection_id, is_mainnet)?;
+
+        let exchange_payload = ExchangePayload {
+            action,
+            signature,
+            nonce: timestamp,
+            vault_address: self.vault_address,
+        };
+
+        let payload = serde_json::to_value(&exchange_payload)
+            .map_err(|e| Error::JsonParse(e.to_string()))?;
+        info_client.post_ws_action(payload).await?;
+        Ok(())
     }
 }
 

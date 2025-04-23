@@ -60,3 +60,20 @@ pub struct WebData2 {
 pub struct ActiveAssetCtx {
     pub data: ActiveAssetCtxData,
 }
+
+pub struct PostResponse {
+    pub data: PostResponseData,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostResponseData {
+    pub id: u64,
+    pub response: PostResponseInner,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostResponseInner {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub payload: serde_json::Value,
+}

@@ -6,8 +6,8 @@ use crate::{
     meta::{Meta, SpotMeta, SpotMetaAndAssetCtxs},
     prelude::*,
     req::HttpClient,
-    ws::{Subscription, WsManager},
-    BaseUrl, Error, Message, OrderStatusResponse, ReferralResponse, UserFeesResponse,
+    ws::{Message, Subscription, WsManager},
+    BaseUrl, Error, OrderStatusResponse, ReferralResponse, UserFeesResponse,
     UserFundingResponse, UserTokenBalanceResponse,
 };
 
@@ -294,5 +294,17 @@ impl InfoClient {
     pub async fn historical_orders(&self, address: H160) -> Result<Vec<OrderInfo>> {
         let input = InfoRequest::HistoricalOrders { user: address };
         self.send_info_request(input).await
+    }
+
+    pub(crate) async fn post_ws_action(&self, payload: serde_json::Value) -> Result<()> {
+        if self.ws_manager.is_none() {
+            return Err(Error::WebSocketNotInitialized);
+        }
+
+        self.ws_manager
+            .as_ref()
+            .ok_or(Error::WsManagerNotFound)?
+            .post_action(payload)
+            .await
     }
 }
