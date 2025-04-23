@@ -3,6 +3,7 @@ use crate::{
     ws::message_types::{AllMids, Candle, L2Book, OrderUpdates, Trades, User},
     ActiveAssetCtx, Error, Notification, UserFills, UserFundings, UserNonFundingLedgerUpdates,
     WebData2, helpers::next_nonce,
+    exchange::exchange_responses::ExchangeResponseStatus,
 };
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use log::{error, info, warn};
@@ -95,14 +96,7 @@ pub struct PostResponse {
 #[derive(Deserialize, Clone, Debug)]
 pub struct PostResponseData {
     pub id: u64,
-    pub response: PostResponseInner,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct PostResponseInner {
-    #[serde(rename = "type")]
-    pub response_type: String,
-    pub payload: serde_json::Value,
+    pub response: ExchangeResponseStatus,
 }
 
 #[derive(Serialize)]

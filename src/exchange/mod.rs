@@ -2,7 +2,7 @@ mod actions;
 mod builder;
 mod cancel;
 mod exchange_client;
-mod exchange_responses;
+pub mod exchange_responses;
 mod modify;
 mod order;
 
