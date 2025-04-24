@@ -3,7 +3,6 @@ use crate::{
     ws::message_types::{AllMids, Candle, L2Book, OrderUpdates, Trades, User},
     ActiveAssetCtx, Error, Notification, UserFills, UserFundings, UserNonFundingLedgerUpdates,
     WebData2, helpers::next_nonce,
-    exchange::exchange_responses::ExchangeResponseStatus,
 };
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use log::{error, info, warn};
@@ -63,6 +62,7 @@ pub enum Subscription {
     UserFundings { user: H160 },
     UserNonFundingLedgerUpdates { user: H160 },
     ActiveAssetCtx { coin: String },
+    Post,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -96,7 +96,44 @@ pub struct PostResponse {
 #[derive(Deserialize, Clone, Debug)]
 pub struct PostResponseData {
     pub id: u64,
-    pub response: serde_json::Value,
+    pub response: PostActionResponse,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostActionResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub payload: PostActionPayload,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(tag = "status", content = "response")]
+pub enum PostActionPayload {
+    #[serde(rename = "ok")]
+    Ok(OrderResponse),
+    #[serde(rename = "error")]
+    Err(String),
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct OrderResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub data: crate::exchange::ExchangeDataStatuses,
+}
+
+impl PostResponse {
+    pub fn into_exchange_response_status(self) -> crate::exchange::ExchangeResponseStatus {
+        match self.data.response.payload {
+            PostActionPayload::Ok(order_response) => {
+                crate::exchange::ExchangeResponseStatus::Ok(crate::exchange::ExchangeResponse {
+                    response_type: order_response.response_type,
+                    data: Some(order_response.data),
+                })
+            }
+            PostActionPayload::Err(err) => crate::exchange::ExchangeResponseStatus::Err(err),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -297,7 +334,8 @@ impl WsManager {
             Message::SubscriptionResponse | Message::Pong => Ok(String::default()),
             Message::NoData => Ok("".to_string()),
             Message::HyperliquidError(err) => Ok(format!("hyperliquid error: {err:?}")),
-            Message::Post(_) => Ok("postResponse".to_string()),
+            Message::Post(_) => serde_json::to_string(&Subscription::Post)
+                .map_err(|e| Error::JsonParse(e.to_string())),
         }
     }
 
